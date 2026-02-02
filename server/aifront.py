@@ -20,7 +20,6 @@ HTML_TEMPLATE = """
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
 
     <style>
-        /* 1. 风格变量系统 */
         :root {
             --bg-color: #f0f2f5;
             --container-bg: #ffffff;
@@ -51,7 +50,6 @@ HTML_TEMPLATE = """
             }
         }
 
-        /* 2. 基础布局 */
         body { transition: 0.3s; background: var(--bg-color); color: var(--text-main); font-family: sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
         #header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
         #chat-container { 
@@ -64,7 +62,6 @@ HTML_TEMPLATE = """
         .user { align-self: flex-end; background: var(--accent); color: white; border-bottom-right-radius: 2px; }
         .ai { align-self: flex-start; background: var(--msg-ai); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
 
-        /* Markdown 样式 */
         .markdown-body pre { background: #1e1e1e; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 10px 0; border: 1px solid #444; }
         .markdown-body code { font-family: 'Consolas', monospace; font-size: 0.9em; }
         .style-terminal .message { border-radius: 0 !important; border: 1px solid var(--accent) !important; }
@@ -75,7 +72,6 @@ HTML_TEMPLATE = """
         .btn-send { background: var(--accent); color: white; }
         .btn-clear { background: #ff4d4f; color: white; }
 
-        /* 动画 */
         .typing { display: flex; gap: 6px; padding: 15px !important; align-items: center; }
         .dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0%, 100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }
@@ -105,7 +101,6 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        // 1. 初始化 Marked 配置
         if (typeof marked !== 'undefined') {
             marked.setOptions({
                 highlight: function(code, lang) {
@@ -122,7 +117,7 @@ HTML_TEMPLATE = """
         async function clearChat() {
             const token = document.getElementById("token").value.trim();
             if(!token) return alert("请先输入 Token");
-            const res = await fetch("/proxy_ask", {
+            await fetch("/proxy_ask", {
                 method: "POST",
                 headers: {"Content-Type":"application/json"},
                 body: JSON.stringify({token, content: "开启新话题"})
@@ -156,6 +151,7 @@ HTML_TEMPLATE = """
                 const node = document.getElementById(tid);
 
                 let rawText = "";
+                // 这里已经能够兼容 Gemini 的返回格式
                 if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
                     rawText = data.candidates[0].content.parts[0].text;
                 } else {
@@ -164,7 +160,6 @@ HTML_TEMPLATE = """
 
                 if(node) {
                     node.classList.remove('typing');
-                    // 检查库加载情况，防止报错
                     const htmlContent = (typeof marked !== 'undefined') ? marked.parse(rawText) : rawText;
                     node.innerHTML = `<b>Agent:</b><br><div class="markdown-body">${htmlContent}</div>`;
                     
@@ -191,13 +186,37 @@ def index():
 @app.route("/proxy_ask", methods=["POST"])
 def proxy_ask():
     data = request.json
+    token = data.get("token")
+    user_content = data.get("content")
+
+    # --- 核心修改：将格式包装为符合 FastAPI 要求的 GeminiRequest 格式 ---
+    gemini_payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": user_content}
+                ]
+            }
+        ]
+    }
+
     try:
-        headers = {"X-Token": data.get("token"), "Content-Type": "application/json"}
-        # 增加超时时间，verify=False 忽略证书校验
-        r = requests.post(BRIDGE_URL, json={"content": data.get("content")}, headers=headers, verify=False, timeout=120)
+        headers = {
+            "X-Token": token, 
+            "Content-Type": "application/json"
+        }
+        # 增加超时时间，verify=False 忽略证书校验（因为访问的是 127.0.0.1 自签名证书或回环）
+        r = requests.post(
+            BRIDGE_URL, 
+            json=gemini_payload, 
+            headers=headers, 
+            verify=False, 
+            timeout=180
+        )
         return jsonify(r.json()), r.status_code
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
+    # 请确保证书文件在当前目录下
     app.run(host="0.0.0.0", port=8080, ssl_context=("xinyava.xyz_bundle.pem", "xinyava.xyz.key"))
